@@ -1,0 +1,20 @@
+{
+  "name": "discord-payment-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test-dashboard": "node test-dashboard.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.23.2",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "stripe": "^19.1.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "payments": [
+    {
+      "userId": "482057590432464906",
+      "tier": "basic",
+      "paymentType": "onetime",
+      "stripeCustomerId": null,
+      "stripeSessionId": "cs_test_a15SmegjiXPeamhRFOfXI5alfFjbpLPjLUXSR6Eiabs6lOOCv89qQoXL64",
+      "subscriptionId": null,
+      "amount": 9.99,
+      "status": "active",
+      "createdAt": "2025-10-22T04:50:02.561Z"
+    }
+  ]
+}
