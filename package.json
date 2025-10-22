@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "test-dashboard": "node test-dashboard.js"
+    "test-dashboard": "node test-dashboard.js",
+    "register-commands": "node commands.js"
   },
   "keywords": [],
   "author": "",

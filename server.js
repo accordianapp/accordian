@@ -9,6 +9,182 @@ const { updateMemberDashboard } = require('./dashboard');
 
 const app = express();
 
+// Platform fee percentage (3%)
+const PLATFORM_FEE_PERCENT = 3;
+
+// ===== STRIPE CONNECT ONBOARDING ENDPOINTS =====
+
+// JSON parsing for Connect endpoints
+app.use('/connect', express.json());
+
+// Start Connect onboarding
+app.post('/connect/onboard', async (req, res) => {
+  try {
+    const { guildId, returnUrl } = req.body;
+
+    if (!guildId) {
+      return res.status(400).json({ error: 'guildId is required' });
+    }
+
+    // Check if account already exists
+    let connectedAccount = await db.getConnectedAccountByGuildId(guildId);
+
+    if (connectedAccount && connectedAccount.stripeAccountId) {
+      // Account exists, create login link
+      const loginLink = await stripe.accounts.createLoginLink(
+        connectedAccount.stripeAccountId
+      );
+      return res.json({ url: loginLink.url });
+    }
+
+    // Create new connected account
+    const account = await stripe.accounts.create({
+      type: 'express',
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
+      },
+      business_type: 'individual',
+    });
+
+    // Save to database
+    await db.saveConnectedAccount({
+      guildId: guildId,
+      stripeAccountId: account.id,
+      onboardingComplete: false,
+      chargesEnabled: false
+    });
+
+    // Create account link for onboarding
+    const accountLink = await stripe.accountLinks.create({
+      account: account.id,
+      refresh_url: `${process.env.WEBHOOK_URL}/connect/onboard/refresh?guildId=${guildId}`,
+      return_url: returnUrl || `${process.env.WEBHOOK_URL}/connect/onboard/complete?guildId=${guildId}`,
+      type: 'account_onboarding',
+    });
+
+    res.json({ url: accountLink.url });
+  } catch (error) {
+    console.error('Error creating Connect account:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Handle onboarding refresh (if user navigates away)
+app.get('/connect/onboard/refresh', async (req, res) => {
+  try {
+    const { guildId } = req.query;
+    const connectedAccount = await db.getConnectedAccountByGuildId(guildId);
+
+    if (!connectedAccount) {
+      return res.status(400).send('Account not found');
+    }
+
+    const accountLink = await stripe.accountLinks.create({
+      account: connectedAccount.stripeAccountId,
+      refresh_url: `${process.env.WEBHOOK_URL}/connect/onboard/refresh?guildId=${guildId}`,
+      return_url: `${process.env.WEBHOOK_URL}/connect/onboard/complete?guildId=${guildId}`,
+      type: 'account_onboarding',
+    });
+
+    res.redirect(accountLink.url);
+  } catch (error) {
+    console.error('Error refreshing Connect onboarding:', error);
+    res.status(500).send('Error refreshing onboarding');
+  }
+});
+
+// Handle onboarding completion
+app.get('/connect/onboard/complete', async (req, res) => {
+  try {
+    const { guildId } = req.query;
+    const connectedAccount = await db.getConnectedAccountByGuildId(guildId);
+
+    if (!connectedAccount) {
+      return res.status(400).send('Account not found');
+    }
+
+    // Fetch account details from Stripe
+    const account = await stripe.accounts.retrieve(connectedAccount.stripeAccountId);
+
+    // Update database with onboarding status
+    await db.saveConnectedAccount({
+      ...connectedAccount,
+      onboardingComplete: account.details_submitted,
+      chargesEnabled: account.charges_enabled,
+      payoutsEnabled: account.payouts_enabled
+    });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Setup Complete</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+          }
+          .container {
+            text-align: center;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+          }
+          h1 { font-size: 48px; margin: 0 0 20px 0; }
+          p { font-size: 20px; margin: 10px 0; }
+          .status { font-size: 16px; opacity: 0.9; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>✅ Setup Complete!</h1>
+          <p>Your Stripe account has been connected.</p>
+          <p class="status">Charges Enabled: ${account.charges_enabled ? '✓' : '✗'}</p>
+          <p class="status">Payouts Enabled: ${account.payouts_enabled ? '✓' : '✗'}</p>
+          <p>You can close this page and return to Discord.</p>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error completing Connect onboarding:', error);
+    res.status(500).send('Error completing onboarding');
+  }
+});
+
+// Get account status
+app.get('/connect/status/:guildId', async (req, res) => {
+  try {
+    const { guildId } = req.params;
+    const connectedAccount = await db.getConnectedAccountByGuildId(guildId);
+
+    if (!connectedAccount) {
+      return res.json({ connected: false });
+    }
+
+    // Fetch latest status from Stripe
+    const account = await stripe.accounts.retrieve(connectedAccount.stripeAccountId);
+
+    res.json({
+      connected: true,
+      onboardingComplete: account.details_submitted,
+      chargesEnabled: account.charges_enabled,
+      payoutsEnabled: account.payouts_enabled
+    });
+  } catch (error) {
+    console.error('Error fetching Connect status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Post payment receipt to log channel
 async function postPaymentReceipt(guild, member, tier, paymentType, amount) {
   try {
@@ -83,6 +259,12 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       await handlePaymentFailed(invoice);
       break;
 
+    // Stripe Connect events
+    case 'account.updated':
+      const account = event.data.object;
+      await handleAccountUpdated(account);
+      break;
+
     default:
       console.log(`Unhandled event type ${event.type}`);
   }
@@ -96,12 +278,22 @@ async function handleSuccessfulPayment(session) {
     const discordUserId = session.metadata.discordUserId;
     const tier = session.metadata.tier;
     const paymentType = session.metadata.paymentType;
+    const guildId = session.metadata.guildId;
+
+    // Get connected account for this guild
+    const connectedAccount = await db.getConnectedAccountByGuildId(guildId);
+
+    if (!connectedAccount) {
+      console.error(`No connected account found for guild ${guildId}`);
+      return;
+    }
+
     const roleId = config.roles[tier].roleId;
 
-    console.log(`Processing payment for user ${discordUserId}, tier: ${tier}, type: ${paymentType}`);
+    console.log(`Processing payment for user ${discordUserId}, tier: ${tier}, type: ${paymentType}, guild: ${guildId}`);
 
     // Get the guild and member
-    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const guild = await client.guilds.fetch(guildId);
     const member = await guild.members.fetch(discordUserId);
 
     // Assign the role
@@ -110,15 +302,24 @@ async function handleSuccessfulPayment(session) {
       await member.roles.add(role);
       console.log(`Assigned role ${role.name} to ${member.user.tag}`);
 
+      // Calculate platform fee
+      const totalAmount = session.amount_total / 100;
+      const platformFee = totalAmount * (PLATFORM_FEE_PERCENT / 100);
+      const serverOwnerReceives = totalAmount - platformFee;
+
       // Save to database
       await db.savePayment({
         userId: discordUserId,
+        guildId: guildId,
         tier: tier,
         paymentType: paymentType,
         stripeCustomerId: session.customer,
         stripeSessionId: session.id,
         subscriptionId: session.subscription || null,
-        amount: session.amount_total / 100,
+        amount: totalAmount,
+        platformFee: platformFee,
+        serverOwnerAmount: serverOwnerReceives,
+        stripeAccountId: connectedAccount.stripeAccountId,
         status: 'active',
         createdAt: new Date()
       });
@@ -129,7 +330,7 @@ async function handleSuccessfulPayment(session) {
       await member.send({ content: successMessage });
 
       // Post receipt to payment log channel
-      await postPaymentReceipt(guild, member, tier, paymentType, session.amount_total / 100);
+      await postPaymentReceipt(guild, member, tier, paymentType, totalAmount);
 
       // Update member dashboard
       await updateMemberDashboard(guild);
@@ -207,7 +408,7 @@ async function handlePaymentFailed(invoice) {
       return;
     }
 
-    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const guild = await client.guilds.fetch(payment.guildId || process.env.GUILD_ID);
     const member = await guild.members.fetch(payment.userId);
 
     // Send warning DM
@@ -216,6 +417,33 @@ async function handlePaymentFailed(invoice) {
     });
   } catch (error) {
     console.error('Error handling payment failure:', error);
+  }
+}
+
+// Handle Connect account updates
+async function handleAccountUpdated(account) {
+  try {
+    const connectedAccount = await db.getConnectedAccountByStripeId(account.id);
+
+    if (!connectedAccount) {
+      console.log('Connected account not found:', account.id);
+      return;
+    }
+
+    // Update account status in database
+    await db.saveConnectedAccount({
+      ...connectedAccount,
+      onboardingComplete: account.details_submitted,
+      chargesEnabled: account.charges_enabled,
+      payoutsEnabled: account.payouts_enabled
+    });
+
+    console.log(`Updated account status for ${account.id}:`, {
+      charges: account.charges_enabled,
+      payouts: account.payouts_enabled
+    });
+  } catch (error) {
+    console.error('Error handling account update:', error);
   }
 }
 

@@ -8,7 +8,10 @@ async function initDatabase() {
   try {
     await fs.access(DB_FILE);
   } catch {
-    await fs.writeFile(DB_FILE, JSON.stringify({ payments: [] }, null, 2));
+    await fs.writeFile(DB_FILE, JSON.stringify({
+      connectedAccounts: [],
+      payments: []
+    }, null, 2));
   }
 }
 
@@ -19,7 +22,7 @@ async function readDatabase() {
     return JSON.parse(data);
   } catch (error) {
     console.error('Error reading database:', error);
-    return { payments: [] };
+    return { connectedAccounts: [], payments: [] };
   }
 }
 
@@ -96,11 +99,74 @@ async function getAllPayments() {
   return db.payments;
 }
 
+// ===== CONNECTED ACCOUNTS FUNCTIONS =====
+
+// Save or update a connected account
+async function saveConnectedAccount(accountData) {
+  await initDatabase();
+  const db = await readDatabase();
+
+  const existingIndex = db.connectedAccounts.findIndex(
+    a => a.guildId === accountData.guildId
+  );
+
+  if (existingIndex !== -1) {
+    db.connectedAccounts[existingIndex] = {
+      ...db.connectedAccounts[existingIndex],
+      ...accountData,
+      updatedAt: new Date().toISOString()
+    };
+  } else {
+    db.connectedAccounts.push({
+      ...accountData,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  await writeDatabase(db);
+  return accountData;
+}
+
+// Get connected account by guild ID
+async function getConnectedAccountByGuildId(guildId) {
+  await initDatabase();
+  const db = await readDatabase();
+  return db.connectedAccounts.find(a => a.guildId === guildId);
+}
+
+// Get connected account by Stripe account ID
+async function getConnectedAccountByStripeId(stripeAccountId) {
+  await initDatabase();
+  const db = await readDatabase();
+  return db.connectedAccounts.find(a => a.stripeAccountId === stripeAccountId);
+}
+
+// Get all connected accounts
+async function getAllConnectedAccounts() {
+  await initDatabase();
+  const db = await readDatabase();
+  return db.connectedAccounts || [];
+}
+
+// Delete connected account
+async function deleteConnectedAccount(guildId) {
+  await initDatabase();
+  const db = await readDatabase();
+  db.connectedAccounts = db.connectedAccounts.filter(a => a.guildId !== guildId);
+  await writeDatabase(db);
+}
+
 module.exports = {
   savePayment,
   getPaymentByUserId,
   getPaymentBySubscriptionId,
   updatePaymentStatus,
   getActivePayments,
-  getAllPayments
+  getAllPayments,
+  saveConnectedAccount,
+  getConnectedAccountByGuildId,
+  getConnectedAccountByStripeId,
+  getAllConnectedAccounts,
+  deleteConnectedAccount
 };
