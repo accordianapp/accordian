@@ -19,7 +19,19 @@ async function initDatabase() {
 async function readDatabase() {
   try {
     const data = await fs.readFile(DB_FILE, 'utf8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+
+    // Ensure connectedAccounts exists for backward compatibility
+    if (!parsed.connectedAccounts) {
+      parsed.connectedAccounts = [];
+    }
+
+    // Ensure payments exists
+    if (!parsed.payments) {
+      parsed.payments = [];
+    }
+
+    return parsed;
   } catch (error) {
     console.error('Error reading database:', error);
     return { connectedAccounts: [], payments: [] };
