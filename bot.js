@@ -36,7 +36,11 @@ async function handleSetupStripe(interaction) {
     }
 
     // Make API call to start onboarding
-    const response = await fetch(`${process.env.WEBHOOK_URL}/connect/onboard`, {
+    const webhookUrl = process.env.WEBHOOK_URL.startsWith('http')
+      ? process.env.WEBHOOK_URL
+      : `https://${process.env.WEBHOOK_URL}`;
+
+    const response = await fetch(`${webhookUrl}/connect/onboard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ guildId: guildId })
