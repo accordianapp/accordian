@@ -30,11 +30,23 @@ app.post('/connect/onboard', async (req, res) => {
     let connectedAccount = await db.getConnectedAccountByGuildId(guildId);
 
     if (connectedAccount && connectedAccount.stripeAccountId) {
-      // Account exists, create login link
-      const loginLink = await stripe.accounts.createLoginLink(
-        connectedAccount.stripeAccountId
-      );
-      return res.json({ url: loginLink.url });
+      // Account exists - check if onboarding is complete
+      if (connectedAccount.onboardingComplete && connectedAccount.chargesEnabled) {
+        // Onboarding complete, create login link
+        const loginLink = await stripe.accounts.createLoginLink(
+          connectedAccount.stripeAccountId
+        );
+        return res.json({ url: loginLink.url });
+      } else {
+        // Onboarding not complete, regenerate onboarding link
+        const accountLink = await stripe.accountLinks.create({
+          account: connectedAccount.stripeAccountId,
+          refresh_url: `${process.env.WEBHOOK_URL}/connect/onboard/refresh?guildId=${guildId}`,
+          return_url: returnUrl || `${process.env.WEBHOOK_URL}/connect/onboard/complete?guildId=${guildId}`,
+          type: 'account_onboarding',
+        });
+        return res.json({ url: accountLink.url });
+      }
     }
 
     // Create new connected account
